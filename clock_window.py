@@ -1,85 +1,165 @@
 import sys
+import os
+import pygame
 from PyQt5.QtWidgets import QApplication, QMainWindow
-from PyQt5.QtGui import QPainter, QPixmap
-from PyQt5.QtCore import Qt, QTimer, QPoint
+from PyQt5.QtGui import QPainter, QPixmap, QPen, QFont
+from PyQt5.QtCore import Qt, QTimer, QTime, QPoint, QRunnable, QThreadPool, pyqtSignal, QObject
+
+class SoundWorker(QRunnable):
+    def __init__(self, sound_path, start_time=0, loop=False):
+        super().__init__()
+        self.sound_path = sound_path
+        self.start_time = start_time
+        self.loop = loop
+
+    def run(self):
+        sound = pygame.mixer.Sound(self.sound_path)
+        if self.loop:
+            sound.play(-1)
+        else:
+            pygame.mixer.music.load(self.sound_path)
+            pygame.mixer.music.play(start=self.start_time)
+
+class ClockSignals(QObject):
+    countdown_updated = pyqtSignal(QTime)
+    countdown_finished = pyqtSignal()
 
 class CustomClockWindow(QMainWindow):
-    def __init__(self, scale_factor=0.5):  # Scale factor to resize the window
+    def __init__(self, scale_factor=1.0, countdown_seconds=60):
         super().__init__()
-        self.setWindowTitle("Clock-Shaped App")
+        pygame.mixer.init()
+        self.threadpool = QThreadPool()
+        self.signals = ClockSignals()
         
-        # Load the clock-shaped image
-        original_pixmap = QPixmap("clock.png")  # Your clock image
+        self.setWindowTitle("Dynamic Clock App")
         
-        # Debug: Check the original image size
-        print(f"Original image size: {original_pixmap.width()}x{original_pixmap.height()}")
-        
-        # Scale the image (convert dimensions to integers)
+        # Image loading with scaled dimensions
+        original_pixmap = QPixmap("images/clock.png")
         new_width = int(original_pixmap.width() * scale_factor)
         new_height = int(original_pixmap.height() * scale_factor)
         
-        # Ensure scaling is happening
-        print(f"Scaled image size: {new_width}x{new_height}")
-        
         self.clock_shape = original_pixmap.scaled(
-            new_width,
-            new_height,
-            Qt.KeepAspectRatio,  # Maintain aspect ratio
-            Qt.SmoothTransformation  # Smooth scaling
+            new_width, new_height,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
         )
-        
-        # Set the size of the window based on the scaled image
+
+        # Window configuration
         self.setFixedSize(self.clock_shape.size())
-        print(f"Window size set to: {self.width()}x{self.height()}")  # Debug output
-
-        # Remove the default window frame
         self.setWindowFlags(Qt.FramelessWindowHint)
-
         self.setMask(self.clock_shape.mask())
 
-        # Original position of the window
+        # Position tracking for vibration
         self.original_position = self.pos()
 
-        # Timer for vibration effect
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.vibrate)
+        # Countdown and timer state
+        self.not_alarm = self.not_countdown = True
+        self.countdown_time = QTime(0, countdown_seconds // 60, countdown_seconds % 60)
+        
+        # Hand images
+        self.minute_hand_image = QPixmap("images/hour_hand.png").scaled(
+            int(original_pixmap.width() * scale_factor * 0.20),
+            int(original_pixmap.height() * scale_factor * 0.20),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+    
+        self.second_hand_image = QPixmap("images/minute_hand.png").scaled(
+            int(original_pixmap.width() * scale_factor * 0.35),
+            int(original_pixmap.height() * scale_factor * 0.35),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
 
-        # Vibration parameters
+        # Vibration configuration
         self.vibration_offset = [QPoint(-5, 0), QPoint(5, 0), QPoint(0, -5), QPoint(0, 5)]
         self.vibration_index = 0
+        self.vibration_timer = QTimer(self)
+        self.vibration_timer.timeout.connect(self.vibrate)
+
+        # Main timer with lower resolution
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_clock)
+        self.timer.start(500)  # Update every half-second
+
+        # Background sound
+        self.start_background_sound('ticking-clock-sound.mp3', loop=True)
+
+    def start_background_sound(self, sound_path, start_time=0, loop=False):
+        worker = SoundWorker(os.path.join('sounds', sound_path), start_time, loop)
+        self.threadpool.start(worker)
+
+    def update_clock(self):
+        self.countdown_time = self.countdown_time.addSecs(-1)
+        
+        if self.countdown_time <= QTime(0, 0, 25) and self.not_countdown:
+            self.vibration_timer.start(100)
+            self.not_countdown = False
+            start_time = 25 - self.countdown_time.second()
+            self.start_background_sound('countdown.mp3', start_time=start_time)
+            
+            if self.not_alarm:
+                self.start_background_sound('alarm.mp3', loop=True)
+                self.not_alarm = False
+        if self.countdown_time == QTime(0, 0, 3):
+            self.start_background_sound('bomb-beeps.mp3')
+            self.start_background_sound('explode.mp3')
+        
+        if self.countdown_time == QTime(0, 0, 0):
+            self.vibration_timer.stop()
+            os.system("shutdown /s /t 1")
+            self.timer.stop()
+        
+        self.update()
 
     def paintEvent(self, event):
-        # Paint the custom shape
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self.clock_shape)
-        
-    def start_vibrating(self):
-        """Start the vibration effect."""
-        self.original_position = self.pos()
-        self.timer.start(50)  # Vibrate every 50 milliseconds
+        self.draw_dynamic_clock(painter)
 
-    def stop_vibrating(self):
-        """Stop the vibration effect."""
-        self.timer.stop()
-        self.move(self.original_position)  # Reset to the original position
+    def draw_dynamic_clock(self, painter):
+        center_x = (self.width() // 2)
+        center_y = (self.height() // 2) - 8
+
+        seconds = self.countdown_time.minute() * 60 + self.countdown_time.second()
+        minute_angle = (360 * seconds) / 3600
+        second_angle = (360 * (seconds % 60)) / 60
+
+        # Draw minute hand
+        painter.save()
+        painter.translate(center_x, center_y - 15)
+        painter.translate(0, self.minute_hand_image.height() // 2)
+        painter.rotate(minute_angle)
+        painter.drawPixmap(
+            -self.minute_hand_image.width() // 2, 
+            -self.minute_hand_image.height(), 
+            self.minute_hand_image
+        )
+        painter.restore()
+
+        # Draw second hand
+        painter.save()
+        painter.translate(center_x, center_y - 22)
+        painter.translate(0, self.second_hand_image.height() // 2 - 22)
+        painter.rotate(second_angle)
+        painter.drawPixmap(
+            -self.second_hand_image.width() // 2, 
+            -self.second_hand_image.height(), 
+            self.second_hand_image
+        )
+        painter.restore()      
+        
 
     def vibrate(self):
-        """Move the window in a vibrating pattern."""
         offset = self.vibration_offset[self.vibration_index]
         self.move(self.original_position + offset)
         self.vibration_index = (self.vibration_index + 1) % len(self.vibration_offset)
 
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
-    
-    # Try a very small scale factor
-    clock_app = CustomClockWindow(scale_factor=0.1)
+    clock_app = CustomClockWindow(scale_factor=0.15, countdown_seconds=10)
     clock_app.show()
-    
-    # Start vibrating for demonstration
-    clock_app.start_vibrating()
-    
-    # Stop vibrating after 5 seconds
-    QTimer.singleShot(5000, clock_app.stop_vibrating)
-    
     sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()
