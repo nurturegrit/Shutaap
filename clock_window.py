@@ -24,6 +24,10 @@ class ClockSignals(QObject):
     countdown_updated = pyqtSignal(QTime)
     countdown_finished = pyqtSignal()
 
+class RedButton(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
 class CustomClockWindow(QMainWindow):
     def __init__(self, scale_factor=1.0, countdown_seconds=60):
         super().__init__()
@@ -161,5 +165,51 @@ def main():
     clock_app.show()
     sys.exit(app.exec_())
 
-if __name__ == "__main__":
-    main()
+
+def red_button():
+    app = QApplication(sys.argv)
+    red_button = RedButton()
+
+#if __name__ == "__main__":
+    #seconds = red_button()
+    #main()
+
+import tkinter as tk
+from tkinter import simpledialog
+
+def calculate_seconds():
+    try:
+        hours = int(simpledialog.askstring("Input", "Enter Hours (default 0):") or 0)
+        minutes = int(simpledialog.askstring("Input", "Enter Minutes (default 0):") or 0)
+        seconds = int(simpledialog.askstring("Input", "Enter Seconds (default 0):") or 0)
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        print(f"Total seconds: {total_seconds}")
+    except ValueError:
+        print("Invalid input. Please enter valid integers.")
+
+# Create the main window
+root = tk.Tk()
+root.title("Circular Button")
+root.geometry("200x200")
+root.overrideredirect(True)  # Remove window decorations
+root.configure(bg="black")
+
+# Create a canvas to draw a circular button
+canvas = tk.Canvas(root, width=200, height=200, bg="black", highlightthickness=0)
+canvas.pack()
+
+# Draw a circular "button"
+button = canvas.create_oval(20, 20, 180, 180, fill="red", outline="darkred", width=5)
+
+# Add text to the button
+canvas.create_text(100, 100, text="Click Me", fill="white", font=("Arial", 16, "bold"))
+
+# Bind the button click
+def on_click(event):
+    if 20 <= event.x <= 180 and 20 <= event.y <= 180:  # Check if click is within the circle
+        calculate_seconds()
+
+canvas.bind("<Button-1>", on_click)
+
+# Run the application
+root.mainloop()
