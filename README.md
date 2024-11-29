@@ -40,7 +40,7 @@ pip install pygame PyQt5
 ### Running the App:
 To run the app, simply execute the following in your terminal:
 ```bash
-python shutdown_app.py
+python shutaap.py
 ```
 
 ## Customization
