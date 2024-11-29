@@ -12,7 +12,7 @@ class CustomClockWindow(QMainWindow):
         self.setWindowTitle("Dynamic Clock App")
         
         # Load the clock-shaped image with more precise scaling
-        original_pixmap = QPixmap("images/clock.png")  # Your hollowed clock image
+        original_pixmap = QPixmap(os.path.join("images", "clock.png"))  # Your hollowed clock image
         
         # Calculate new dimensions with more control
         new_width = int(original_pixmap.width() * scale_factor)
