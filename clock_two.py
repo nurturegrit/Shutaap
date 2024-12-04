@@ -1,5 +1,4 @@
 import sys
-import math, time
 from PyQt5.QtWidgets import QApplication, QMainWindow
 from PyQt5.QtGui import QPainter, QPixmap, QPen
 from PyQt5.QtCore import Qt, QTimer, QTime, QPoint
@@ -12,8 +11,7 @@ class CustomClockWindow(QMainWindow):
         self.setWindowTitle("Dynamic Clock App")
         
         # Load the clock-shaped image with more precise scaling
-        original_pixmap = QPixmap(os.path.join("images", "clock.png"))  # Your hollowed clock image
-        
+        original_pixmap = QPixmap(os.path.join("images", "clock.png")) # Your hollowed clock image
         # Calculate new dimensions with more control
         new_width = int(original_pixmap.width() * scale_factor)
         new_height = int(original_pixmap.height() * scale_factor)
@@ -72,8 +70,8 @@ class CustomClockWindow(QMainWindow):
         
     def start_countdown(self):
         pygame.mixer.music.load(os.path.join('sounds', 'countdown.mp3'))
-        time.sleep(2)
-        pygame.mixer.music.play(start=25-self.countdown_time.second()-5)
+        pygame.mixer.music.play(start=25-self.countdown_time.second())
+
     def explode(self):
         pygame.mixer.Sound(os.path.join('sounds', 'bomb-beeps.mp3'))
         self.explosion = pygame.mixer.Sound(os.path.join('sounds', 'explode.mp3'))

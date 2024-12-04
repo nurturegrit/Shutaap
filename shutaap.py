@@ -1,18 +1,61 @@
-import sys
-import os
+import sys, json
 import pygame
-from PyQt5.QtWidgets import QApplication, QMainWindow, QInputDialog
-from PyQt5.QtGui import QPainter, QPixmap, QPen, QFont
+from PyQt5.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, 
+    QLabel, QLineEdit, QPushButton, 
+    QMessageBox, QApplication, QMainWindow, QComboBox
+)
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPainter, QPixmap, QColor, QPainterPath
 from PyQt5.QtCore import Qt, QTimer, QTime, QPoint, QRunnable, QThreadPool, pyqtSignal, QObject
 
-# Global variables for countdown settings
-SECONDS = 30
-TURN_ON = False
+COUNTDOWN = 0
+CONFIGURATION = 10
+
+import platform
+import os
+
+def shutdown_system(action='shutdown'):
+    """
+    Perform system action based on user selection.
+    
+    Args:
+        action (str): Desired system action. 
+        Options: 'shutdown', 'restart', 'sleep'
+    """
+    if action is None:
+        return
+
+    system = platform.system()
+    
+    try:
+        if system == "Windows":
+            action_map = {
+                'shutdown': 'shutdown /s /t 1',
+                'restart': 'shutdown /r /t 1',
+                'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0'
+            }
+        elif system == "Linux":
+            action_map = {
+                'shutdown': 'shutdown -h now',
+                'restart': 'shutdown -r now',
+                'sleep': 'systemctl suspend'
+            }
+        elif system == "Darwin":  # macOS
+            action_map = {
+                'shutdown': 'shutdown -h now',
+                'restart': 'shutdown -r now',
+                'sleep': 'pmset sleepnow'
+            }
+        else:
+            raise OSError(f"Unsupported operating system: {system}")
+        
+        os.system(action_map.get(action, action_map['shutdown']))
+    
+    except Exception as e:
+        print(f"Error performing system action: {e}")
 
 class SoundWorker(QRunnable):
-    """
-    A worker class for playing sound asynchronously using pygame.
-    """
     def __init__(self, sound_path, start_time=0, loop=False):
         super().__init__()
         self.sound_path = sound_path
@@ -20,41 +63,36 @@ class SoundWorker(QRunnable):
         self.loop = loop
 
     def run(self):
-        # Load and play sound at the specified path
         sound = pygame.mixer.Sound(self.sound_path)
         if self.loop:
-            sound.play(-1)  # Loop indefinitely
+            sound.play(-1)
         else:
             pygame.mixer.music.load(self.sound_path)
             pygame.mixer.music.play(start=self.start_time)
 
 class ClockSignals(QObject):
-    """
-    Custom signals for communication regarding clock countdown state.
-    """
-    countdown_updated = pyqtSignal(QTime)  # Signal to update countdown time
-    countdown_finished = pyqtSignal()      # Signal when countdown finishes
+    countdown_updated = pyqtSignal(QTime)
+    countdown_finished = pyqtSignal()
 
-class RedButton(QMainWindow):
-    """
-    A simple QMainWindow subclass for future functionalities.
-    """
-    def __init__(self):
+class ShutdownTimerApp(QMainWindow):
+    def __init__(self, scale_factor=1.0):
         super().__init__()
+        pygame.mixer.init()
+        self.threadpool = QThreadPool()
+        # Initialize window properties
+        self.setWindowTitle("Shutdown Timer")
 
-class CustomClockWindow(QMainWindow):
-    """
-    Main window for a customizable clock application with countdown and vibration effects.
-    """
-    def __init__(self, scale_factor=1.0, countdown_seconds=60):
-        super().__init__()
-        pygame.mixer.init()  # Initialize pygame mixer for sound functionalities
-        self.threadpool = QThreadPool()  # Thread pool for handling background tasks
-        self.signals = ClockSignals()  # Create clock-related signals
+        try:
+            if os.path.isfile("config.json"):
+                global CONFIGURATION
+                with open("config.json") as file:
+                    data = json.load(file)
+                CONFIGURATION = data["total increase in timer"]
+                self.system_action = data["system action"]
+        except:
+            self.system_action = "shutdown"
         
-        self.setWindowTitle("Dynamic Clock App")  # Set window title
-        
-        # Load and scale clock image based on scale factor
+        # Load and scale clock image
         original_pixmap = QPixmap("images/clock.png")
         new_width = int(original_pixmap.width() * scale_factor)
         new_height = int(original_pixmap.height() * scale_factor)
@@ -64,19 +102,40 @@ class CustomClockWindow(QMainWindow):
             Qt.SmoothTransformation
         )
 
-        # Configure the window appearance and shape
-        self.setFixedSize(self.clock_shape.size())
+        self.red_btn_pos_x = new_width // 2 - 20
+
+        # Load red button image
+        red_button_pixmap = QPixmap("images/red-button.png").scaled(
+            int(new_width * 0.15),  # Smaller button size
+            int(new_height * 0.15),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        self.red_button = red_button_pixmap
+
+        # Create a custom mask that includes the red button
+        full_mask = QPixmap(self.clock_shape.size())
+        full_mask.fill(Qt.transparent)
+    
+        painter = QPainter(full_mask)
+        painter.drawPixmap(0, 0, self.clock_shape)
+        # Ensure red button area is also transparent
+        painter.drawPixmap(self.red_btn_pos_x, 0, self.red_button)
+        painter.end()
+
+        # Set the new mask
+        self.setFixedSize(full_mask.size())
         self.setWindowFlags(Qt.FramelessWindowHint)
-        self.setMask(self.clock_shape.mask())
-
-        # Original position for vibration reference
-        self.original_position = self.pos()
-
-        # Countdown and timer state initialization
-        self.not_alarm = self.not_countdown = True
-        self.countdown_time = QTime(0, countdown_seconds // 60, countdown_seconds % 60)
+        self.setMask(full_mask.mask())
         
-        # Load and scale hand images for the clock
+        # Countdown state
+        self.countdown_time = QTime(0, 0, 0)
+        self.not_alarm = self.not_countdown = True
+        
+        # Total countdown time for red region rising
+        self.total_countdown_seconds = 0
+
+        # Load hand images
         self.minute_hand_image = QPixmap("images/hour_hand.png").scaled(
             int(original_pixmap.width() * scale_factor * 0.20),
             int(original_pixmap.height() * scale_factor * 0.20),
@@ -91,78 +150,287 @@ class CustomClockWindow(QMainWindow):
             Qt.SmoothTransformation
         )
 
-        # Configure vibration effects
+        # Vibration setup
+        self.original_position = self.pos()
         self.vibration_offset = [QPoint(-5, 0), QPoint(5, 0), QPoint(0, -5), QPoint(0, 5)]
         self.vibration_index = 0
         self.vibration_timer = QTimer(self)
-        # Connect vibration timer to vibrate method
         self.vibration_timer.timeout.connect(self.vibrate)
 
-        # Main timer for clock updates
+        # Main timer
         self.timer = QTimer(self)
-        # Connect timer to update the clock
         self.timer.timeout.connect(self.update_clock)
-        self.timer.start(500)  # Update every half-second
 
-        # Start background ticking sound
+    def mousePressEvent(self, event):
+        """Handle mouse clicks for red button"""
+        global COUNTDOWN, CONFIGURATION
+        if event.button() == Qt.LeftButton:
+            # Check if click is within red button area
+            if (event.x() >= self.red_btn_pos_x and 
+                event.x() <= self.red_btn_pos_x + self.red_button.width() and 
+                event.y() <= self.red_button.height()):
+                COUNTDOWN += CONFIGURATION
+                if COUNTDOWN > 0:
+                    self.stop_vibration()
+                    self.stop_background_sound()
+                    self.start_countdown(COUNTDOWN)
+            else:
+                button_rect = self.red_button.rect()
+                if button_rect.contains(event.pos()):
+                    CONFIGURATION, self.system_action = self.configure_countdown_time()
+
+    def configure_countdown_time(self):
+        """
+        Prompt user for countdown time and system action with an elegantly designed dialog.
+        
+        Returns:
+            tuple: (total seconds, system action) or (0, None) if canceled
+        """
+        # Custom styled dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("System Action Timer")
+        dialog.setMinimumWidth(450)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #f0f0f0;
+                border-radius: 10px;
+            }
+            QLabel {
+                color: #2c3e50;
+                font-size: 14px;
+                margin-bottom: 10px;
+            }
+            QLineEdit, QComboBox {
+                padding: 8px;
+                border: 2px solid #ff0000;
+                border-radius: 5px;
+                font-size: 14px;
+                background-color: white;
+            }
+            QPushButton {
+                background-color: #ff0000;
+                color: white;
+                border: none;
+                padding: 10px 15px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:pressed {
+                background-color: #21618C;
+            }
+        """)
+        
+        # Main layout
+        layout = QVBoxLayout()
+        
+        # Title and description
+        title_label = QLabel("Configuration")
+        title_label.setStyleSheet("""
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 15px;
+            text-align: center;
+        """)
+        layout.addWidget(title_label)
+        
+        # System Action Dropdown
+        action_layout = QHBoxLayout()
+        action_label = QLabel("Select System Action:")
+        action_dropdown = QComboBox()
+        action_dropdown.addItems(["Shutdown", "Restart", "Sleep", "Nothing"])
+        action_dropdown.setCurrentIndex(0)
+        
+        action_layout.addWidget(action_label)
+        action_layout.addWidget(action_dropdown)
+        layout.addLayout(action_layout)
+        
+        # Time input layout
+        input_layout = QHBoxLayout()
+        time_label = QLabel("Enter Time (HH:MM:SS):")
+        time_input = QLineEdit()
+        time_input.setPlaceholderText("01:30:45")
+        
+        input_layout.addWidget(time_label)
+        input_layout.addWidget(time_input)
+        layout.addLayout(input_layout)
+        
+        # Example and hint
+        hint_label = QLabel(
+            "Examples:\n"
+            "• 01:30:45 = 1 hour, 30 minutes, 45 seconds\n"
+            "• 00:15:00 = 15 minutes\n"
+            "• 02:00:00 = 2 hours"
+        )
+        hint_label.setStyleSheet("""
+            color: #7f8c8d;
+            font-size: 12px;
+            margin-top: 5px;
+            margin-bottom: 10px;
+        """)
+        layout.addWidget(hint_label)
+        
+        # Button layout
+        button_layout = QHBoxLayout()
+        confirm_btn = QPushButton("Save Settings")
+        cancel_btn = QPushButton("Cancel")
+        
+        button_layout.addWidget(confirm_btn)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        
+        dialog.setLayout(layout)
+        
+        # Connect buttons
+        confirm_btn.clicked.connect(dialog.accept)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        # Show dialog and process result
+        if dialog.exec_() == QDialog.Accepted:
+            try:
+                # Parse input
+                input_text = time_input.text()
+                hours, minutes, seconds = map(int, input_text.split(':'))
+                
+                # Get selected system action
+                system_action = action_dropdown.currentText().lower()
+                if system_action == "nothing":
+                    system_action = None
+                # Validate time ranges
+                if (0 <= hours <= 24 and 
+                    0 <= minutes <= 59 and 
+                    0 <= seconds <= 59):
+                    
+                    total_seconds = hours * 3600 + minutes * 60 + seconds
+                    
+                    # Confirmation message
+                    confirm = QMessageBox(self)
+                    confirm.setWindowTitle("Confirm Action")
+                    confirm.setText(
+                        f"System will {system_action} in:\n"
+                        f"• {hours} hours\n"
+                        f"• {minutes} minutes\n"
+                        f"• {seconds} seconds"
+                    )
+                    confirm.setIcon(QMessageBox.Question)
+                    confirm.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+                    config_file = "config.json"
+                    if confirm.exec_() == QMessageBox.Yes:
+                        if not os.path.isfile(config_file):
+                            with open("config.json", "w") as file:
+                                json.dump({
+                                    "total increase in timer": total_seconds,
+                                    "system action": system_action
+                                }, file, indent=4)
+                        else:
+                                                # Update the existing config.json file
+                            with open(config_file, "r") as file:
+                                data = json.load(file)  # Load current data into a dictionary
+
+                            # Update the data with new values
+                            data.update({
+                                "total increase in timer": total_seconds,
+                                "system action": system_action
+                            })
+
+                            # Write updated data back to the file
+                            with open(config_file, "w") as file:
+                                json.dump(data, file, indent=4)
+                        return total_seconds, system_action
+                else:
+                    QMessageBox.warning(
+                        self, 
+                        "Invalid Input", 
+                        "Please enter valid times:\n"
+                        "• Hours: 0-24\n"
+                        "• Minutes: 0-59\n"
+                        "• Seconds: 0-59"
+                    )
+            
+            except ValueError:
+                QMessageBox.warning(
+                    self, 
+                    "Incorrect Format", 
+                    "Please use 'HH:MM:SS' format\n"
+                    "Example: 01:30:45"
+                )
+        
+        return CONFIGURATION, self.system_action
+    
+    def start_countdown(self, total_seconds):
+        """Start the countdown timer"""
+        self.total_countdown_seconds = total_seconds
+        self.countdown_time = QTime(0, total_seconds // 60, total_seconds % 60)
+        self.timer.start(1000)  # Update every second
         self.start_background_sound('ticking-clock-sound.mp3', loop=True)
 
     def start_background_sound(self, sound_path, start_time=0, loop=False):
-        """
-        Play a background sound asynchronously.
-        """
-        # Create and start a sound worker
+        """Play background sound asynchronously"""
         worker = SoundWorker(os.path.join('sounds', sound_path), start_time, loop)
         self.threadpool.start(worker)
 
+    def stop_vibration(self):
+        """Stop the vibration effect"""
+        self.vibration_timer.stop()
+        self.move(self.original_position)
+
+    def stop_background_sound(self):
+        """Stop all background music and sounds"""
+        pygame.mixer.music.stop()
+        pygame.mixer.stop()
+    
     def update_clock(self):
-        """
-        Update clock state, countdown, and play sounds for key intervals.
-        """
-        # Decrement the countdown time by one second
+        """Update clock state and countdown"""
         self.countdown_time = self.countdown_time.addSecs(-1)
+
+        if self.countdown_time > QTime(0, 0, 25) and not self.not_countdown:
+            self.not_countdown = True
+            self.stop_background_sound()
+            self.stop_vibration()
         
-        # Check for countdown nearing end and play respective sound effects
-        if self.countdown_time <= QTime(0, 0, 25) and self.not_countdown:
-            self.vibration_timer.start(100)  # Start vibration effect
+        elif self.countdown_time <= QTime(0, 0, 25) and self.not_countdown:
+            self.vibration_timer.start(100)
             self.not_countdown = False
-            # Calculate and start countdown sound
-            start_time = 25 - self.countdown_time.second()
+            start_time = 24 - self.countdown_time.second()
             self.start_background_sound('countdown.mp3', start_time=start_time)
             
             if self.not_alarm:
-                # Play alarm sound as a loop
                 self.start_background_sound('alarm.mp3', loop=True)
                 self.not_alarm = False
+        
         if self.countdown_time == QTime(0, 0, 3):
-            # Play bomb beeps and explosion sounds
             self.start_background_sound('bomb-beeps.mp3')
             self.start_background_sound('explode.mp3')
         
         if self.countdown_time == QTime(0, 0, 0):
-            self.vibration_timer.stop()  # Stop vibration
-            # Trigger system shutdown (commented for safety)
-            #os.system("shutdown /s /t 1")
-            self.timer.stop()  # Stop all updates
+            self.vibration_timer.stop()
+            self.timer.stop()
+            self.stop_background_sound()
+            # Uncomment to actually shutdown system
+            shutdown_system(action=self.system_action)
         
-        self.update()  # Update the paint event
+        self.update()
 
     def paintEvent(self, event):
-        """
-        Redraw the clock image and clock hands at each paint event.
-        """
+        """Redraw the clock and red button"""
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self.clock_shape)
+        
+        # Draw red button in top-left corner
+        painter.drawPixmap(self.red_btn_pos_x, 0, self.red_button)
+        
         self.draw_dynamic_clock(painter)
+        self.draw_rising_red_region(painter)
 
     def draw_dynamic_clock(self, painter):
-        """
-        Draw and rotate clock hands according to countdown time.
-        """
+        """Draw and rotate clock hands"""
         center_x = (self.width() // 2)
         center_y = (self.height() // 2) - 8
 
-        # Calculate angles for hand rotations
         seconds = self.countdown_time.minute() * 60 + self.countdown_time.second()
         minute_angle = (360 * seconds) / 3600
         second_angle = (360 * (seconds % 60)) / 60
@@ -191,101 +459,53 @@ class CustomClockWindow(QMainWindow):
         )
         painter.restore()      
         
+    def draw_rising_red_region(self, painter):
+        """Draw a rising red region as countdown approaches zero"""
+        if self.total_countdown_seconds == 0:
+            return
+
+        # Calculate remaining time fraction
+        remaining_fraction = (self.countdown_time.minute() * 60 + self.countdown_time.second()) / self.total_countdown_seconds
+        
+        # Center of the clock
+        center_x = (self.width() // 2)
+        center_y = (self.height() // 2) - 8
+
+        # Dimensions for the rising region
+        width = self.width()   # 60% of clock width
+        height = self.height()   # 50% of clock height
+
+        # Calculate current height of the red region
+        current_height = height * (1 - remaining_fraction)
+
+        # Create a path for the rising region
+        path = QPainterPath()
+        path.addRect(
+            center_x - width/2, 
+            center_y + height/2 - current_height, 
+            width, 
+            current_height
+        )
+
+        # Set up semi-transparent red color
+        painter.setBrush(QColor(198, 40, 40, 255))  # Slightly transparent red
+        painter.setPen(Qt.NoPen)
+
+        # Draw the rising red region
+        painter.drawPath(path)
+        
     def vibrate(self):
-        """
-        Simulate a vibration effect by changing window position.
-        """
+        """Simulate vibration effect"""
         offset = self.vibration_offset[self.vibration_index]
         self.move(self.original_position + offset)
         self.vibration_index = (self.vibration_index + 1) % len(self.vibration_offset)
 
 def main():
-    """
-    Main function to start the clock application with specified settings.
-    """
+    """Main function to start the app"""
     app = QApplication(sys.argv)
-    # Initialize and show the clock app window
-    clock_app = CustomClockWindow(scale_factor=0.15, countdown_seconds=SECONDS)
-    clock_app.show()
+    shutdown_timer = ShutdownTimerApp(scale_factor=0.15)
+    shutdown_timer.show()
     sys.exit(app.exec_())
 
-class RedButtonWindow(QMainWindow):
-    """
-    A window displaying a red button that allows users to set a countdown timer.
-    """
-    def __init__(self, scale_factor=1.0):
-        super().__init__()
-        self.setWindowTitle("Red Button App")
-        
-        # Load the red button image
-        self.image_path = os.path.join("images", "red-button.png")  # Ensure path is correct
-        if not os.path.exists(self.image_path):
-            print(f"Error: Image not found at {self.image_path}")
-            sys.exit(1)
-        
-        original_pixmap = QPixmap(self.image_path)
-        
-        # Scale the image according to the given factor
-        new_width = int(original_pixmap.width() * scale_factor)
-        new_height = int(original_pixmap.height() * scale_factor)
-        self.red_button = original_pixmap.scaled(
-            new_width,
-            new_height,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
-        )
-
-        # Configure the window size and shape
-        self.setFixedSize(self.red_button.size())
-        self.setWindowFlags(Qt.FramelessWindowHint)
-        self.setMask(self.red_button.mask())
-
-    def paintEvent(self, event):
-        """
-        Draw the red button as the window background.
-        """
-        painter = QPainter(self)
-        painter.drawPixmap(0, 0, self.red_button)
-
-    def mousePressEvent(self, event):
-        """
-        Handle mouse click event to start countdown.
-        """
-        if event.button() == Qt.LeftButton:
-            global SECONDS, TURN_ON
-            SECONDS = max(self.calculate_seconds(), 10)  # Prevent very short countdowns
-            TURN_ON = True
-            self.close()
-
-    def calculate_seconds(self):
-        """
-        Prompt the user to input hours, minutes, and seconds, then calculate total seconds.
-        """
-        try:
-            hours, ok1 = QInputDialog.getInt(self, "Input", "Enter Hours (default 0):", 0, 0)
-            if not ok1:
-                print(hours, ok1)  # For debugging purposes
-                return
-            minutes, ok2 = QInputDialog.getInt(self, "Input", "Enter Minutes (default 0):", 0, 0)
-            if not ok2:
-                return
-            seconds, ok3 = QInputDialog.getInt(self, "Input", "Enter Seconds (default 0):", 0, 0)
-            if not ok3:
-                return
-            total_seconds = hours * 3600 + minutes * 60 + seconds
-            print(f"Total seconds: {total_seconds}")  # Output the calculated result for confirmation
-            return total_seconds
-        except ValueError:
-            print("Invalid input. Please enter valid integers.")  # Handle invalid input
-
 if __name__ == "__main__":
-    """
-    Entry point for the application. Displays a RedButtonWindow to set countdown time, then launches main.
-    """
-    app = QApplication(sys.argv)
-    # Show the red button window first
-    red_button_app = RedButtonWindow(scale_factor=0.15)  # Adjust scale factor as needed
-    red_button_app.show()
-    app.exec_()
-    if TURN_ON:
-        main()
+    main()
