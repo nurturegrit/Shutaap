@@ -149,11 +149,6 @@ Potential enhancements:
    ```bash
    python shutdown_timer.py
    ```
-
-## Licensing and Attribution
-
-[Specify your chosen license]
-
 **Acknowledgments**
 - PyQt5 Community
 - Pygame Development Team
