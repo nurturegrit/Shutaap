@@ -15,45 +15,50 @@ CONFIGURATION = 10
 import platform
 import os
 
+import subprocess
+
+def resource_path(relative_path):
+    """
+    Get the absolute path to a resource.
+    """
+    base_path = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
+
 def shutdown_system(action='shutdown'):
     """
-    Perform system action based on user selection.
+    Perform system action based on user selection, cross-platform compatible.
     
     Args:
-        action (str): Desired system action. 
-        Options: 'shutdown', 'restart', 'sleep'
+        action (str): Desired system action ('shutdown', 'restart', 'sleep').
     """
-    if action is None:
-        return
-
-    system = platform.system()
-    
     try:
+        if action is None:
+            return
+        system = platform.system()
         if system == "Windows":
             action_map = {
-                'shutdown': 'shutdown /s /t 1',
-                'restart': 'shutdown /r /t 1',
-                'sleep': 'rundll32.exe powrprof.dll,SetSuspendState 0,1,0'
+                'shutdown': ['shutdown', '/s', '/t', '1'],
+                'restart': ['shutdown', '/r', '/t', '1'],
+                'sleep': ['rundll32.exe', 'powrprof.dll,SetSuspendState', '0,1,0']
             }
         elif system == "Linux":
             action_map = {
-                'shutdown': 'shutdown -h now',
-                'restart': 'shutdown -r now',
-                'sleep': 'systemctl suspend'
+                'shutdown': ['shutdown', '-h', 'now'],
+                'restart': ['shutdown', '-r', 'now'],
+                'sleep': ['systemctl', 'suspend']
             }
         elif system == "Darwin":  # macOS
             action_map = {
-                'shutdown': 'shutdown -h now',
-                'restart': 'shutdown -r now',
-                'sleep': 'pmset sleepnow'
+                'shutdown': ['shutdown', '-h', 'now'],
+                'restart': ['shutdown', '-r', 'now'],
+                'sleep': ['pmset', 'sleepnow']
             }
         else:
-            raise OSError(f"Unsupported operating system: {system}")
+            raise OSError(f"Unsupported OS: {system}")
         
-        os.system(action_map.get(action, action_map['shutdown']))
-    
+        subprocess.run(action_map.get(action, action_map['shutdown']), check=True)
     except Exception as e:
-        print(f"Error performing system action: {e}")
+        print(f"Error: {e}")
 
 class SoundWorker(QRunnable):
     def __init__(self, sound_path, start_time=0, loop=False):
@@ -79,21 +84,26 @@ class ShutdownTimerApp(QMainWindow):
         super().__init__()
         pygame.mixer.init()
         self.threadpool = QThreadPool()
+        self.on = False
         # Initialize window properties
         self.setWindowTitle("Shutdown Timer")
 
+        config_path = os.path.join(os.path.expanduser("~"), "shutdown_timer_config.json")
+
         try:
-            if os.path.isfile("config.json"):
+            if os.path.isfile(config_path):
                 global CONFIGURATION
-                with open("config.json") as file:
+                with open(config_path) as file:
                     data = json.load(file)
                 CONFIGURATION = data["total increase in timer"]
                 self.system_action = data["system action"]
+            else:
+                self.system_action = "shutdown"
         except:
             self.system_action = "shutdown"
         
         # Load and scale clock image
-        original_pixmap = QPixmap("images/clock.png")
+        original_pixmap = QPixmap(resource_path("images/clock.png"))
         new_width = int(original_pixmap.width() * scale_factor)
         new_height = int(original_pixmap.height() * scale_factor)
         self.clock_shape = original_pixmap.scaled(
@@ -105,7 +115,7 @@ class ShutdownTimerApp(QMainWindow):
         self.red_btn_pos_x = new_width // 2 - 20
 
         # Load red button image
-        red_button_pixmap = QPixmap("images/red-button.png").scaled(
+        red_button_pixmap = QPixmap(resource_path("images/red-button.png")).scaled(
             int(new_width * 0.15),  # Smaller button size
             int(new_height * 0.15),
             Qt.KeepAspectRatio,
@@ -136,20 +146,20 @@ class ShutdownTimerApp(QMainWindow):
         self.total_countdown_seconds = 0
 
         # Load hand images
-        self.minute_hand_image = QPixmap("images/hour_hand.png").scaled(
+        self.minute_hand_image = QPixmap(resource_path(resource_path("images/hour_hand.png"))).scaled(
             int(original_pixmap.width() * scale_factor * 0.20),
             int(original_pixmap.height() * scale_factor * 0.20),
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
     
-        self.second_hand_image = QPixmap("images/minute_hand.png").scaled(
+        self.second_hand_image = QPixmap(resource_path(resource_path("images/minute_hand.png"))).scaled(
             int(original_pixmap.width() * scale_factor * 0.35),
             int(original_pixmap.height() * scale_factor * 0.35),
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
         )
-
+        print(self.system_action)
         # Vibration setup
         self.original_position = self.pos()
         self.vibration_offset = [QPoint(-5, 0), QPoint(5, 0), QPoint(0, -5), QPoint(0, 5)]
@@ -171,6 +181,7 @@ class ShutdownTimerApp(QMainWindow):
                 event.y() <= self.red_button.height()):
                 COUNTDOWN += CONFIGURATION
                 if COUNTDOWN > 0:
+                    self.on = True
                     self.stop_vibration()
                     self.stop_background_sound()
                     self.start_countdown(COUNTDOWN)
@@ -242,7 +253,15 @@ class ShutdownTimerApp(QMainWindow):
         action_label = QLabel("Select System Action:")
         action_dropdown = QComboBox()
         action_dropdown.addItems(["Shutdown", "Restart", "Sleep", "Nothing"])
-        action_dropdown.setCurrentIndex(0)
+        if self.system_action == "restart":
+            x = 1
+        elif self.system_action == "sleep":
+            x = 2
+        elif self.system_action is None:
+            x = 3
+        else:
+            x = 0
+        action_dropdown.setCurrentIndex(x)
         
         action_layout.addWidget(action_label)
         action_layout.addWidget(action_dropdown)
@@ -318,10 +337,10 @@ class ShutdownTimerApp(QMainWindow):
                     )
                     confirm.setIcon(QMessageBox.Question)
                     confirm.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-                    config_file = "config.json"
+                    config_file = os.path.join(os.path.expanduser("~"), "shutdown_timer_config.json")
                     if confirm.exec_() == QMessageBox.Yes:
                         if not os.path.isfile(config_file):
-                            with open("config.json", "w") as file:
+                            with open(config_file, "w") as file:
                                 json.dump({
                                     "total increase in timer": total_seconds,
                                     "system action": system_action
@@ -363,14 +382,14 @@ class ShutdownTimerApp(QMainWindow):
     
     def start_countdown(self, total_seconds):
         """Start the countdown timer"""
+        self.start_background_sound('ticking-clock-sound.mp3', loop=True)
         self.total_countdown_seconds = total_seconds
         self.countdown_time = QTime(0, total_seconds // 60, total_seconds % 60)
         self.timer.start(1000)  # Update every second
-        self.start_background_sound('ticking-clock-sound.mp3', loop=True)
 
     def start_background_sound(self, sound_path, start_time=0, loop=False):
         """Play background sound asynchronously"""
-        worker = SoundWorker(os.path.join('sounds', sound_path), start_time, loop)
+        worker = SoundWorker(resource_path(os.path.join('sounds', sound_path)), start_time, loop)
         self.threadpool.start(worker)
 
     def stop_vibration(self):
@@ -386,17 +405,19 @@ class ShutdownTimerApp(QMainWindow):
     def update_clock(self):
         """Update clock state and countdown"""
         self.countdown_time = self.countdown_time.addSecs(-1)
+        global COUNTDOWN
+        COUNTDOWN -= 1
 
         if self.countdown_time > QTime(0, 0, 25) and not self.not_countdown:
             self.not_countdown = True
             self.stop_background_sound()
             self.stop_vibration()
         
-        elif self.countdown_time <= QTime(0, 0, 25) and self.not_countdown:
+        elif self.countdown_time <= QTime(0, 0, 23) and self.not_countdown:
             self.vibration_timer.start(100)
             self.not_countdown = False
-            start_time = 24 - self.countdown_time.second()
-            self.start_background_sound('countdown.mp3', start_time=start_time)
+            # start_time = 24 - self.countdown_time.second()
+            self.start_background_sound('countdown.mp3', start_time=0)
             
             if self.not_alarm:
                 self.start_background_sound('alarm.mp3', loop=True)
