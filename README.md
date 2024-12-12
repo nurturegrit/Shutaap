@@ -6,6 +6,16 @@ The Shutdown Timer is a sophisticated desktop application that transforms the mu
 
 ## Architectural Design
 
+#### To run on Windows, use the dist/shutaap.exe file
+
+![Demo](images/shutaap.gif)
+
+
+![Config](images/shutaap-config.png)
+
+### To access the config setting, click on the the area encircled in the red circle in the image above.
+
+
 ### Core Architectural Principles
 
 The application is built on a modular, cross-platform architecture that emphasizes:
