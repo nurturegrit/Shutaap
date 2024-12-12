@@ -15,6 +15,8 @@ The Shutdown Timer is a sophisticated desktop application that transforms the mu
 
 ### To access the config setting, click on the the area encircled in the red circle in the image above.
 
+### Repeatedly clicking on the red button will increase the timer of the clock by time as configur3ed in the config settings,
+
 
 ### Core Architectural Principles
 
